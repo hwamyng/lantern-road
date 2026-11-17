@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>등불의 길 — 게시판 관리</title>
+<style>
+body{font-family:system-ui,-apple-system,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;margin:0;background:#f4f2ee;color:#222}
+main{max-width:760px;margin:0 auto;padding:16px}
+h1{font-size:1.2rem}
+input,select,button{font:inherit;padding:.45rem .6rem;border:1px solid #bbb;border-radius:6px;background:#fff}
+button{cursor:pointer}
+.row{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin:.5rem 0}
+.card{background:#fff;border:1px solid #ddd;border-radius:8px;padding:.7rem .8rem;margin:.5rem 0}
+.card.hid{background:#f1e6e6;border-color:#d9b3b3}
+.meta{font-size:.8rem;color:#666;display:flex;gap:.6rem;flex-wrap:wrap;margin-bottom:.3rem}
+.tag{background:#933;color:#fff;border-radius:4px;padding:0 .35rem}
+.txt{white-space:pre-wrap;word-break:break-all}
+.small{font-size:.85rem;color:#555}
+#msg{color:#933}
+.chip{display:inline-flex;gap:.3rem;align-items:center;background:#eee;border-radius:12px;padding:.1rem .5rem;margin:.15rem}
+.chip button{border:none;background:none;padding:0 .2rem;color:#933}
+</style></head>
+<body><main>
+<h1>등불의 길 — 게시판 관리</h1>
+<p id="msg"></p>
+
+<section id="login" hidden>
+  <p class="small">관리자 이메일로 로그인 링크를 받습니다.</p>
+  <div class="row"><input id="email" type="email" placeholder="관리자 이메일" style="flex:1"><button id="send">로그인 링크 받기</button></div>
+</section>
+
+<section id="panel" hidden>
+  <div class="row">
+    <span class="small" id="who"></span>
+    <button id="out">로그아웃</button>
+  </div>
+  <div class="row">
+    <select id="road"></select>
+    <select id="show"><option value="all">전체</option><option value="hidden">숨긴 글만</option><option value="visible">보이는 글만</option></select>
+    <input id="q" placeholder="글 내용 검색" style="flex:1">
+    <button id="reload">새로고침</button>
+  </div>
+  <p class="small" id="count"></p>
+  <div id="list"></div>
+
+  <h2 style="font-size:1rem;margin-top:2rem">금칙어 (들어간 글은 자동 숨김)</h2>
+  <div id="words"></div>
+  <div class="row"><input id="newword" placeholder="추가할 단어"><button id="addword">추가</button></div>
+</section>
+</main>
+<script src="config.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.0/dist/umd/supabase.js"></script>
+<script>
+const ROAD={1:"솔내 가는 길",2:"노루섬 앞바다",3:"검은 물길",4:"마지막 문",5:"전깃줄 아래",6:"빼앗긴 들",7:"배달된 상자",8:"길목",9:"갈라진 마을",10:"불 꺼진 셋방",11:"새벽 세 시"};
+const FLAG={banword:"금칙어",link:"링크",admin:"관리자 숨김"};
+const $=id=>document.getElementById(id), msg=t=>{$("msg").textContent=t||"";};
+const sb=supabase.createClient(window.LR.url, window.LR.key);
+let rows=[];
+$("road").innerHTML='<option value="">모든 길</option>'+Object.entries(ROAD).map(([k,v])=>`<option value="${k}">${k}. ${v}</option>`).join("");
+
+async function start(){
+  const {data:{session}}=await sb.auth.getSession();
+  if(!session){ $("login").hidden=false; $("panel").hidden=true; return; }
+  const {data:isAdmin}=await sb.rpc("is_admin");
+  if(!isAdmin){ msg("이 이메일은 관리자로 등록되어 있지 않습니다."); $("login").hidden=false; return; }
+  $("login").hidden=true; $("panel").hidden=false; $("who").textContent=session.user.email+" 로 로그인";
+  load(); words();
+}
+async function load(){
+  msg("");
+  let q=sb.from("stories").select("id,road,text,created_at,updated_at,hidden,flagged,device").order("created_at",{ascending:false}).limit(1000);
+  if($("road").value) q=q.eq("road",+$("road").value);
+  if($("show").value==="hidden") q=q.eq("hidden",true);
+  if($("show").value==="visible") q=q.eq("hidden",false);
+  const {data,error}=await q; if(error) return msg("불러오지 못했습니다: "+error.message);
+  rows=data; draw();
+}
+function draw(){
+  const k=$("q").value.trim(); const list=$("list"); list.textContent="";
+  const v=rows.filter(r=>!k||r.text.includes(k));
+  $("count").textContent=`${v.length}개`;
+  v.forEach(r=>{
+    const d=document.createElement("div"); d.className="card"+(r.hidden?" hid":"");
+    const t=new Date(r.updated_at||r.created_at).toLocaleString("ko-KR");
+    d.innerHTML=`<div class="meta"><span>${r.road}. ${ROAD[r.road]||""}</span><span>${t}</span><span>기기 ${r.device.slice(0,6)}</span>${r.hidden?`<span class="tag">숨김${r.flagged?" · "+(FLAG[r.flagged]||r.flagged):""}</span>`:""}</div><div class="txt"></div><div class="row"></div>`;
+    d.querySelector(".txt").textContent=r.text;
+    const bar=d.querySelector(".row");
+    const h=document.createElement("button"); h.textContent=r.hidden?"다시 보이기":"숨기기";
+    h.onclick=async()=>{ const {error}=await sb.from("stories").update(r.hidden?{hidden:false,flagged:null}:{hidden:true,flagged:"admin"}).eq("id",r.id); if(error) msg(error.message); else load(); };
+    const x=document.createElement("button"); x.textContent="삭제";
+    x.onclick=async()=>{ if(!x.dataset.sure){ x.dataset.sure=1; x.textContent="한 번 더 누르면 삭제"; return; } const {error}=await sb.from("stories").delete().eq("id",r.id); if(error) msg(error.message); else load(); };
+    bar.append(h,x); list.appendChild(d);
+  });
+}
+async function words(){
+  const {data}=await sb.from("banwords").select("word").order("word");
+  const w=$("words"); w.textContent="";
+  (data||[]).forEach(r=>{ const c=document.createElement("span"); c.className="chip"; c.textContent=r.word;
+    const b=document.createElement("button"); b.textContent="×"; b.title="빼기";
+    b.onclick=async()=>{ await sb.from("banwords").delete().eq("word",r.word); words(); };
+    c.appendChild(b); w.appendChild(c); });
+}
+$("addword").onclick=async()=>{ const v=$("newword").value.trim(); if(!v) return; const {error}=await sb.from("banwords").insert({word:v}); if(error) msg(error.message); $("newword").value=""; words(); };
+$("send").onclick=async()=>{ const e=$("email").value.trim(); if(!e) return;
+  const {error}=await sb.auth.signInWithOtp({email:e, options:{emailRedirectTo:location.origin+location.pathname}});
+  msg(error?("보내지 못했습니다: "+error.message):"메일함에서 로그인 링크를 눌러 주세요."); };
+$("out").onclick=async()=>{ await sb.auth.signOut(); location.reload(); };
+["road","show"].forEach(i=>$(i).onchange=load); $("reload").onclick=load; $("q").oninput=draw;
+sb.auth.onAuthStateChange((ev)=>{ if(ev==="SIGNED_IN") start(); });
+start();
+</script>
+</body></html>
